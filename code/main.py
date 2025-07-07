@@ -164,6 +164,26 @@ def preprocess_data(df):
     df['base_salary'] = pd.to_numeric(df['base_salary'], errors='coerce')
     df = df[df['base_salary'].notna() & (df['base_salary'] > 0)]
 
+
+    def normalize_job_title(title):
+        title = title.lower().strip()
+        
+        # Fix common variants of Data Scientist
+        if title in ["Data Scienist", "Data Scntist", "Dt Scientist"]:
+            return "Data Scientist"
+        if title in ["ML Enginer","ML Engr","Machine Learning Engr"]:
+            return "Machine Learning Engineer"
+        if title in ["Softwre Engineer","Software Engr","Sofware Engneer"]:
+            return "Software Engineer"
+
+        
+        # Add more mappings as needed
+        return title.title()  # Capitalize each word
+
+# Apply to column
+    df["job_title"] = df["job_title"].apply(normalize_job_title)
+
+
     # Fill missing values for key categorical fields
     df['experience_level'] = df.get('experience_level', 'Unknown').fillna('Unknown')
     df['employment_type'] = df.get('employment_type', 'Unknown').fillna('Unknown')
