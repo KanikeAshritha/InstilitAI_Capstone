@@ -1,0 +1,136 @@
+version: '3.8'  # Use Docker Compose file format 3.8
+
+services:
+
+  # --------------------
+  # PostgreSQL Database
+  # --------------------
+  postgres:
+    image: postgres:13  # Base image: PostgreSQL version 13
+    container_name: airflow-postgres  # Name of the running container
+    environment:  # Environment variables for initializing the DB
+      POSTGRES_USER: kanikeashritha  # Username for PostgreSQL
+      POSTGRES_PASSWORD: ash         # Password for PostgreSQL
+      POSTGRES_DB: instilit          # Name of the initial database
+    ports:
+      - "5432:5432"  # Map PostgreSQL default port from container to host
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data  # Store DB data persistently
+
+  # -------------------------------------
+  # Airflow Init - initializes Airflow DB
+  # -------------------------------------
+  airflow-init:
+    build:  # Use custom Dockerfile in current directory
+      context: .
+      dockerfile: Dockerfile
+    image: apache/airflow:2.9.0  # Use Apache Airflow version 2.9.0
+    container_name: airflow-init
+    depends_on:
+      - postgres  # Wait for PostgreSQL to be ready
+    entrypoint: bash -c "airflow db init"  # Command to initialize the metadata DB
+    environment:
+      - DB_HOST=postgres
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor  # Run tasks locally in parallel
+      - MLFLOW_TRACKING_URI=http://host.docker.internal:5002
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://kanikeashritha:ash@postgres/instilit
+        # SQLAlchemy connection string for Airflow to connect to PostgreSQL
+      - _PIP_ADDITIONAL_REQUIREMENTS=mlflow evidently pandas scikit-learn joblib xgboost lightgbm shap
+        # Extra Python packages needed for ML pipeline
+    volumes:
+      - ./mlruns:/mlruns
+      - ./dags:/opt/airflow/dags  # Mount DAGs folder
+      - ./data:/opt/airflow/data  # Store raw input data
+      - ./logs:/opt/airflow/logs  # Mount logs directory
+      - ./plugins:/opt/airflow/plugins  # Mount plugins folder (for custom operators/hooks)
+      - ./airflow-db:/opt/airflow  # Mount Airflow config and DB directory
+      - ../:/opt/airflow/instilit_capstoneproj  # Mount project code (outside airflow-docker folder)
+      - ./dags/drift_flag.json:/opt/airflow/dags/drift_flag.json  # Mount drift flag JSON for drift monitoring
+
+  # --------------------
+  # Airflow Webserver
+  # --------------------
+  webserver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: apache/airflow:2.9.0
+    container_name: airflow-web
+    depends_on:
+      - airflow-init  # Wait for initialization
+      - postgres
+    ports:
+      - "8080:8080" # Web UI accessible at localhost:8080
+    command: >
+      bash -c "
+        airflow users create --username airflow --password airflow --firstname Ash --lastname Dev --role Admin --email admin@example.com &&
+        airflow webserver
+      "
+      # Creates admin user and launches Airflow web server
+    environment:
+      - DB_HOST=postgres
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - MLFLOW_TRACKING_URI=http://host.docker.internal:5002
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://kanikeashritha:ash@postgres/instilit
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False  # Disable loading example DAGs
+      - _PIP_ADDITIONAL_REQUIREMENTS=mlflow evidently pandas scikit-learn joblib xgboost lightgbm shap
+    volumes:
+      - ./mlruns:/mlruns
+      - ./dags:/opt/airflow/dags
+      - ./data:/opt/airflow/data
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - ./airflow-db:/opt/airflow
+      - ../:/opt/airflow/instilit_capstoneproj
+      - ./dags/drift_flag.json:/opt/airflow/dags/drift_flag.json
+
+  # --------------------
+  # Airflow Scheduler
+  # --------------------
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: apache/airflow:2.9.0
+    container_name: airflow-scheduler
+    depends_on:
+      - airflow-init
+      - postgres
+    command: airflow scheduler  # Starts Airflow scheduler to trigger tasks
+    environment:
+      - DB_HOST=postgres
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - MLFLOW_TRACKING_URI=http://host.docker.internal:5002
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://kanikeashritha:ash@postgres/instilit
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - _PIP_ADDITIONAL_REQUIREMENTS=mlflow evidently pandas scikit-learn joblib xgboost lightgbm shap
+    volumes:
+      - ./mlruns:/mlruns
+      - ./dags:/opt/airflow/dags
+      - ./data:/opt/airflow/data
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+      - ./airflow-db:/opt/airflow
+      - ../:/opt/airflow/instilit_capstoneproj
+      - ./dags/drift_flag.json:/opt/airflow/dags/drift_flag.json
+
+  mlflow:
+    image: python:3.12-slim
+    container_name: mlflow
+    volumes:
+      - ./mlruns:/mlruns
+      - ./mlflow.db:/mlflow.db
+    ports:
+      - "5002:5000"
+    working_dir: /app
+    command: >
+      sh -c "pip install mlflow && 
+             mlflow server --backend-store-uri sqlite:///mlflow.db 
+                          --default-artifact-root file:/mlruns 
+                          --host 0.0.0.0 --port 5000"
+
+# ----------------------------
+# Volume to persist Postgres DB
+# ----------------------------
+volumes:
+  postgres-db-volume:
