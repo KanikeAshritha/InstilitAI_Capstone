@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Upload CSV for Prediction</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+</head>
+<body class="container">
+    <h1 class="mt-5">Upload CSV to Predict Adjusted Salary</h1>
+    <form action="/predict" method="post" enctype="multipart/form-data" class="mt-3">
+        <input type="file" name="file" accept=".csv" class="form-control-file" required>
+        <button type="submit" class="btn btn-primary mt-3">Predict</button>
+    </form>
+</body>
+</html>
