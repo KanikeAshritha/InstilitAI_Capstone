@@ -1,4 +1,3 @@
-# %% Imports
 import pandas as pd
 import numpy as np
 import psycopg2
@@ -25,15 +24,12 @@ warnings.filterwarnings("ignore")
 import joblib
 import mlflow
 from sqlalchemy import create_engine
-
 import os
 
-# Dynamically choose the DB host
-DB_HOST = os.getenv("DB_HOST", "localhost")  # default is localhost for local testing
+# Dynamically choose the DB host (for flexibility between local and containerized environments)
+DB_HOST = os.getenv("DB_HOST", "localhost")
 
-
-
-# Database configuration
+# Database configuration for PostgreSQL
 DB_CONFIG = {
     "dbname": "instilit",
     "user": "kanikeashritha",
@@ -45,21 +41,23 @@ DB_CONFIG = {
 TABLE_NAME = "instilit_salary_data"
 CSV_PATH = "Software_Salaries.csv"
 
-# Load CSV and insert into PostgreSQL after removing duplicates
+# Load the CSV and insert into PostgreSQL after removing duplicates
 def load_csv_to_postgres(csv_path, table_name, db_config):
     df = pd.read_csv(csv_path)
     df.columns = df.columns.str.strip()
     df = df.replace({pd.NA: None, pd.NaT: None})
     df = df.drop_duplicates()
 
+    # Convert to list of rows
     data = df.values.tolist()
     
+    # Connect and insert into PostgreSQL
     conn = psycopg2.connect(**db_config)
     cur = conn.cursor()
 
-    cur.execute(f"DELETE FROM {table_name}")  # Clear old data before inserting new
+    # Clear existing rows before inserting new data
+    cur.execute(f"DELETE FROM {table_name}")
 
-    # Insert all cleaned rows
     insert_query = f"""
     INSERT INTO {table_name} (
         job_title, experience_level, employment_type, company_size, company_location,
@@ -74,7 +72,7 @@ def load_csv_to_postgres(csv_path, table_name, db_config):
     conn.close()
     print("Duplicates removed & data inserted into PostgreSQL.")
 
-# Load data from PostgreSQL
+# Load cleaned data from PostgreSQL
 def load_data_from_postgres(table_name, db_config):
     conn = psycopg2.connect(**db_config)
     df = pd.read_sql_query(f"SELECT * FROM {table_name}", con=conn)
@@ -82,7 +80,7 @@ def load_data_from_postgres(table_name, db_config):
     print("Data loaded successfully from PostgreSQL!")
     return df
 
-# Perform exploratory data analysis
+# Perform exploratory data analysis (EDA) to understand distributions and data quality
 def perform_eda(df):
     df = df.copy()
 
@@ -95,7 +93,7 @@ def perform_eda(df):
     print("\nDescriptive Statistics:")
     print(df.describe())
 
-    # Plot histograms for numeric features
+    # Plot histograms to check distribution (to identify skewness or heavy tails)
     num_cols = ['base_salary', 'bonus', 'stock_options', 'adjusted_total_usd']
     for col in num_cols:
         if col in df.columns:
@@ -105,7 +103,7 @@ def perform_eda(df):
             plt.tight_layout()
             plt.show()
 
-    # Plot correlation heatmap
+    # Plot correlation to check multicollinearity or strong predictive relationships
     corr = df.corr(numeric_only=True)
     if not corr.empty:
         plt.figure(figsize=(10, 6))
@@ -113,13 +111,14 @@ def perform_eda(df):
         plt.title("Correlation Heatmap")
         plt.show()
 
-    # Plot boxplots for important salary columns
+    # Boxplots show many outliers in salary fields (base_salary, adjusted_total_usd)
+    # Therefore, outlier handling is required during preprocessing
     for col in ['base_salary', 'adjusted_total_usd', 'salary_in_usd']:
         sns.boxplot(x=df[col])
         plt.title(f"Boxplot: {col}")
         plt.show()
 
-    # Countplot for categorical columns
+    # Countplots help identify imbalances or dominant values in categorical fields
     cat_cols = ['company_size', 'remote_ratio', 'salary_currency', 'currency',
                 'employment_type', 'experience_level', 'company_location', 'job_title']
     for col in cat_cols:
@@ -136,13 +135,14 @@ def perform_eda(df):
         plt.tight_layout()
         plt.show()
 
-    # Scatterplots of features vs adjusted salary
+    # Scatterplots show that features like base_salary and bonus increase with adjusted salary
+    # years_experience also shows some trend, validating it as a good feature
     for col in ['years_experience', 'base_salary', 'bonus', 'stock_options']:
         sns.scatterplot(x=col, y='adjusted_total_usd', data=df)
         plt.title(f"{col} vs Adjusted Salary")
         plt.show()
 
-# Cap outliers using the IQR method
+# Function to cap outliers using IQR (based on EDA that revealed many salary outliers)
 def cap_outliers_iqr(df, column):
     Q1 = df[column].quantile(0.25)
     Q3 = df[column].quantile(0.75)
@@ -153,64 +153,58 @@ def cap_outliers_iqr(df, column):
     df.loc[df[column] > upper, column] = upper
     return df
 
-# Preprocess the data (clean, encode, scale)
+# Clean and preprocess data before model training
 def preprocess_data(df):
     df = df.copy()
 
     if 'base_salary' not in df.columns:
         raise ValueError("'base_salary' column is missing from the input data.")
 
-    # Remove rows where base salary is missing or zero
+    # Remove rows where base_salary is zero or missing
     df['base_salary'] = pd.to_numeric(df['base_salary'], errors='coerce')
     df = df[df['base_salary'].notna() & (df['base_salary'] > 0)]
 
-
+    # Normalize inconsistent or misspelled job titles based on EDA observations
     def normalize_job_title(title):
         title = title.lower().strip()
-        
-        # Fix common variants of Data Scientist
-        if title in ["Data Scienist", "Data Scntist", "Dt Scientist"]:
+        if title in ["data scienist", "data scntist", "dt scientist"]:
             return "Data Scientist"
-        if title in ["ML Enginer","ML Engr","Machine Learning Engr"]:
+        if title in ["ml enginer", "ml engr", "machine learning engr"]:
             return "Machine Learning Engineer"
-        if title in ["Softwre Engineer","Software Engr","Sofware Engneer"]:
+        if title in ["softwre engineer", "software engr", "sofware engneer"]:
             return "Software Engineer"
+        return title.title()
 
-        
-        # Add more mappings as needed
-        return title.title()  # Capitalize each word
-
-# Apply to column
     df["job_title"] = df["job_title"].apply(normalize_job_title)
 
-
-    # Fill missing values for key categorical fields
+    # Fill missing experience_level and employment_type
     df['experience_level'] = df.get('experience_level', 'Unknown').fillna('Unknown')
     df['employment_type'] = df.get('employment_type', 'Unknown').fillna('Unknown')
 
-    # Drop unused or less relevant columns
+    # Drop columns found irrelevant or noisy during EDA
     df.drop(columns=['skills', 'education'], inplace=True, errors='ignore')
 
-    # Clean numeric fields and fill missing with 0
+    # Clean numeric fields and replace invalid/missing with 0
     numeric_cols = ['base_salary', 'salary_in_usd', 'conversion_rate', 'bonus', 'stock_options', 'total_salary']
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-    # Cap outliers for salary fields
+    # Based on EDA boxplots, cap extreme values in salaries
     cap_cols = ['base_salary', 'salary_in_usd']
     if 'adjusted_total_usd' in df.columns:
         cap_cols.append('adjusted_total_usd')
     for col in cap_cols:
         df = cap_outliers_iqr(df, col)
 
-    # Apply transformation to the target variable
+    # Apply power transformation to reduce skewness in the target variable
     if 'adjusted_total_usd' in df.columns:
         pt = PowerTransformer(method='yeo-johnson')
         df['transformed_salary'] = pt.fit_transform(df[['adjusted_total_usd']])
     else:
-        df['transformed_salary'] = np.log1p(df['base_salary'])  # fallback
+        df['transformed_salary'] = np.log1p(df['base_salary'])
 
+    # Also keep log of base_salary as a potential useful feature
     df['log_base_salary'] = np.log1p(df['base_salary'])
 
     return df
