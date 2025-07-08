@@ -10,5 +10,5 @@ jobs:
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          pip install -r requirements.txt
+          pip install -r Airflow_dag/requirements.txt
           python code/main.py
